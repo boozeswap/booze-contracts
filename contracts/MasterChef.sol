@@ -1,5 +1,3 @@
-
-
 pragma solidity 0.6.12;
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -23,8 +21,8 @@ contract MasterChef is Ownable, ReentrancyGuard {
 
     // Info of each user.
     struct UserInfo {
-        uint256 amount;         // How many LP tokens the user has provided.
-        uint256 rewardDebt;     // Reward debt. See explanation below.
+        uint256 amount; // How many LP tokens the user has provided.
+        uint256 rewardDebt; // Reward debt. See explanation below.
         //
         // We do some fancy math here. Basically, any point in time, the amount of BOOZEs
         // entitled to a user but is pending to be distributed is:
@@ -40,11 +38,11 @@ contract MasterChef is Ownable, ReentrancyGuard {
 
     // Info of each pool.
     struct PoolInfo {
-        IBEP20 lpToken;           // Address of LP token contract.
-        uint256 allocPoint;       // How many allocation points assigned to this pool. BOOZEs to distribute per block.
-        uint256 lastRewardBlock;  // Last block number that BOOZEs distribution occurs.
-        uint256 accBoozePerShare;   // Accumulated BOOZEs per share, times 1e12. See below.
-        uint16 depositFeeBP;      // Deposit fee in basis points
+        IBEP20 lpToken; // Address of LP token contract.
+        uint256 allocPoint; // How many allocation points assigned to this pool. BOOZEs to distribute per block.
+        uint256 lastRewardBlock; // Last block number that BOOZEs distribution occurs.
+        uint256 accBoozePerShare; // Accumulated BOOZEs per share, times 1e12. See below.
+        uint16 depositFeeBP; // Deposit fee in basis points
     }
 
     // The BOOZE TOKEN!
@@ -58,6 +56,13 @@ contract MasterChef is Ownable, ReentrancyGuard {
     // Deposit Fee address
     address public feeAddress;
 
+    // Token addresses that has tax rate
+    mapping(address => uint16) private _taxableTokens;
+    // Max tax rate for the defitionary tokens: 10%
+    uint16 public constant MAXIMUM_TAX_RATE = 1000;
+    // Max deposit fee: 5%
+    uint16 public constant MAXIMUM_DEPOSIT_FEE = 500;
+
     // Info of each pool.
     PoolInfo[] public poolInfo;
     // Info of each user that stakes LP tokens.
@@ -69,7 +74,11 @@ contract MasterChef is Ownable, ReentrancyGuard {
 
     event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
-    event EmergencyWithdraw(address indexed user, uint256 indexed pid, uint256 amount);
+    event EmergencyWithdraw(
+        address indexed user,
+        uint256 indexed pid,
+        uint256 amount
+    );
     event SetFeeAddress(address indexed user, address indexed newAddress);
     event SetDevAddress(address indexed user, address indexed newAddress);
     event UpdateEmissionRate(address indexed user, uint256 goosePerBlock);
@@ -99,49 +108,87 @@ contract MasterChef is Ownable, ReentrancyGuard {
     }
 
     // Add a new lp to the pool. Can only be called by the owner.
-    function add(uint256 _allocPoint, IBEP20 _lpToken, uint16 _depositFeeBP, bool _withUpdate) public onlyOwner nonDuplicated(_lpToken) {
-        require(_depositFeeBP <= 10000, "add: invalid deposit fee basis points");
+    function add(
+        uint256 _allocPoint,
+        IBEP20 _lpToken,
+        uint16 _depositFeeBP,
+        bool _withUpdate
+    ) public onlyOwner nonDuplicated(_lpToken) {
+        require(
+            _depositFeeBP <= MAXIMUM_DEPOSIT_FEE,
+            "add: invalid deposit fee basis points"
+        );
         if (_withUpdate) {
             massUpdatePools();
         }
-        uint256 lastRewardBlock = block.number > startBlock ? block.number : startBlock;
+        uint256 lastRewardBlock = block.number > startBlock
+            ? block.number
+            : startBlock;
         totalAllocPoint = totalAllocPoint.add(_allocPoint);
         poolExistence[_lpToken] = true;
-        poolInfo.push(PoolInfo({
-        lpToken : _lpToken,
-        allocPoint : _allocPoint,
-        lastRewardBlock : lastRewardBlock,
-        accBoozePerShare : 0,
-        depositFeeBP : _depositFeeBP
-        }));
+        poolInfo.push(
+            PoolInfo({
+                lpToken: _lpToken,
+                allocPoint: _allocPoint,
+                lastRewardBlock: lastRewardBlock,
+                accBoozePerShare: 0,
+                depositFeeBP: _depositFeeBP
+            })
+        );
     }
 
     // Update the given pool's BOOZE allocation point and deposit fee. Can only be called by the owner.
-    function set(uint256 _pid, uint256 _allocPoint, uint16 _depositFeeBP, bool _withUpdate) public onlyOwner {
-        require(_depositFeeBP <= 10000, "set: invalid deposit fee basis points");
+    function set(
+        uint256 _pid,
+        uint256 _allocPoint,
+        uint16 _depositFeeBP,
+        bool _withUpdate
+    ) public onlyOwner {
+        require(
+            _depositFeeBP <= MAXIMUM_DEPOSIT_FEE,
+            "set: invalid deposit fee basis points"
+        );
         if (_withUpdate) {
             massUpdatePools();
         }
-        totalAllocPoint = totalAllocPoint.sub(poolInfo[_pid].allocPoint).add(_allocPoint);
+        totalAllocPoint = totalAllocPoint.sub(poolInfo[_pid].allocPoint).add(
+            _allocPoint
+        );
         poolInfo[_pid].allocPoint = _allocPoint;
         poolInfo[_pid].depositFeeBP = _depositFeeBP;
     }
 
     // Return reward multiplier over the given _from to _to block.
-    function getMultiplier(uint256 _from, uint256 _to) public view returns (uint256) {
+    function getMultiplier(uint256 _from, uint256 _to)
+        public
+        view
+        returns (uint256)
+    {
         return _to.sub(_from).mul(BONUS_MULTIPLIER);
     }
 
     // View function to see pending BOOZEs on frontend.
-    function pendingBooze(uint256 _pid, address _user) external view returns (uint256) {
+    function pendingBooze(uint256 _pid, address _user)
+        external
+        view
+        returns (uint256)
+    {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][_user];
         uint256 accBoozePerShare = pool.accBoozePerShare;
         uint256 lpSupply = pool.lpToken.balanceOf(address(this));
         if (block.number > pool.lastRewardBlock && lpSupply != 0) {
-            uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number);
-            uint256 boozeReward = multiplier.mul(boozePerBlock).mul(pool.allocPoint).div(totalAllocPoint);
-            accBoozePerShare = accBoozePerShare.add(boozeReward.mul(1e12).div(lpSupply));
+            uint256 multiplier = getMultiplier(
+                pool.lastRewardBlock,
+                block.number
+            );
+            uint256 boozeReward = multiplier
+            .mul(boozePerBlock)
+            .mul(pool.allocPoint)
+            .div(totalAllocPoint);
+            accBoozePerShare = accBoozePerShare.add(
+                boozeReward.mul(1e12).div(lpSupply)
+            );
         }
         return user.amount.mul(accBoozePerShare).div(1e12).sub(user.rewardDebt);
     }
@@ -166,10 +213,15 @@ contract MasterChef is Ownable, ReentrancyGuard {
             return;
         }
         uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number);
-        uint256 boozeReward = multiplier.mul(boozePerBlock).mul(pool.allocPoint).div(totalAllocPoint);
+        uint256 boozeReward = multiplier
+        .mul(boozePerBlock)
+        .mul(pool.allocPoint)
+        .div(totalAllocPoint);
         booze.mint(devaddr, boozeReward.div(10));
         booze.mint(address(this), boozeReward);
-        pool.accBoozePerShare = pool.accBoozePerShare.add(boozeReward.mul(1e12).div(lpSupply));
+        pool.accBoozePerShare = pool.accBoozePerShare.add(
+            boozeReward.mul(1e12).div(lpSupply)
+        );
         pool.lastRewardBlock = block.number;
     }
 
@@ -179,13 +231,30 @@ contract MasterChef is Ownable, ReentrancyGuard {
         UserInfo storage user = userInfo[_pid][msg.sender];
         updatePool(_pid);
         if (user.amount > 0) {
-            uint256 pending = user.amount.mul(pool.accBoozePerShare).div(1e12).sub(user.rewardDebt);
+            uint256 pending = user
+            .amount
+            .mul(pool.accBoozePerShare)
+            .div(1e12)
+            .sub(user.rewardDebt);
             if (pending > 0) {
                 safeBoozeTransfer(msg.sender, pending);
             }
         }
         if (_amount > 0) {
-            pool.lpToken.safeTransferFrom(address(msg.sender), address(this), _amount);
+            pool.lpToken.safeTransferFrom(
+                address(msg.sender),
+                address(this),
+                _amount
+            );
+
+            // When the token in the liquidity is defitionary token
+            if (tokenTaxRate(address(pool.lpToken)) > 0) {
+                uint256 transferTax = _amount
+                .mul(tokenTaxRate(address(pool.lpToken)))
+                .div(10000);
+                _amount = _amount.sub(transferTax);
+            }
+
             if (pool.depositFeeBP > 0) {
                 uint256 depositFee = _amount.mul(pool.depositFeeBP).div(10000);
                 pool.lpToken.safeTransfer(feeAddress, depositFee);
@@ -204,7 +273,9 @@ contract MasterChef is Ownable, ReentrancyGuard {
         UserInfo storage user = userInfo[_pid][msg.sender];
         require(user.amount >= _amount, "withdraw: not good");
         updatePool(_pid);
-        uint256 pending = user.amount.mul(pool.accBoozePerShare).div(1e12).sub(user.rewardDebt);
+        uint256 pending = user.amount.mul(pool.accBoozePerShare).div(1e12).sub(
+            user.rewardDebt
+        );
         if (pending > 0) {
             safeBoozeTransfer(msg.sender, pending);
         }
@@ -251,7 +322,29 @@ contract MasterChef is Ownable, ReentrancyGuard {
         feeAddress = _feeAddress;
         emit SetFeeAddress(msg.sender, _feeAddress);
     }
-    
+
+    /**
+     * @dev Returns the tax rate of the token address.
+     */
+    function tokenTaxRate(address _address) public view returns (uint16) {
+        return _taxableTokens[_address];
+    }
+
+    /**
+     * @dev Set tax rate of token.
+     * Can only be called by the owner.
+     */
+    function setTokenTaxRate(address _address, uint16 _taxRate)
+        public
+        onlyOwner
+    {
+        require(
+            _taxRate <= MAXIMUM_TAX_RATE,
+            "setTokenTaxRate:: Out of maximum limit"
+        );
+        _taxableTokens[_address] = _taxRate;
+    }
+
     function updateEmissionRate(uint256 _boozePerBlock) public onlyOwner {
         massUpdatePools();
         boozePerBlock = _boozePerBlock;
